@@ -1,13 +1,9 @@
 package main
 
 import (
-  // "log"
   "os"
   "fmt"
   "database/sql"
-  "io"
-  // "io/ioutil"
-  "archive/zip"
   "github.com/mattn/go-sqlite3"
 )
 
@@ -64,9 +60,14 @@ func buildSpatial(name string) error {
       "Failed to build `stops_geo` table on sqlite db: %v", spatStopsErr)
   }
 
-  if spatShapesErr := buildSpatialShapes(db); spatShapesErr != nil {
-    return fmt.Errorf(
-      "Failed to build `shapes_geo` table on sqlite db: %v", spatShapesErr)
+  var tblExist string
+  if err := db.QueryRow( // check if "shapes" table exists
+    "select name from sqlite_master "+
+    "where type='table' AND name='shapes';").Scan(&tblExist); err == nil {
+    if spatShapesErr := buildSpatialShapes(db); spatShapesErr != nil {
+      return fmt.Errorf(
+        "Failed to build `shapes_geo` table on sqlite db: %v", spatShapesErr)
+    }
   }
 
   // log.Print("Successfully built spatialite tables.")
@@ -142,77 +143,3 @@ func buildSpatialStops(db *sql.DB) error {
 
   return nil
 }
-
-
-/**
- * Basic CSV export of GTFS files.
- */
-func exportCSV(dir string, gtfs *zip.Reader) error {
-  dir = dir+"csv/" // export to "csv" subdir
-
-  // ensure dir exists
-  if mkdirErr := os.MkdirAll(dir, 0777); mkdirErr != nil {
-    return mkdirErr
-  }
-
-  // write each file directly (original csv format)
-  for _, f := range gtfs.File {
-
-    // create new csv file, with same name
-    w, writeErr := os.Create(dir+f.Name)
-    if writeErr != nil {
-      return writeErr
-    }
-
-    // read the file from zip
-    r, readErr := f.Open()
-    if readErr != nil {
-      return readErr
-    }
-
-    // copy straight from read to write
-    if _, copyErr := io.Copy(w, r); copyErr != nil {
-      return copyErr
-    }
-  }
-
-  return nil
-}
-
-/**
- * Basic JSON export of GTFS files.
- *
-func exportJSON(dir string, data map[string][]byte) {
-  dir = dir+"json/" // export to "json" subdir
-  os.MkdirAll(dir, 0777) // ensure exists
-
-
-	// setup parsers for each file
-	parseFn := map[string]func(csvFile) jsony{
-		"stops.txt":  parseStops,
-		"shapes.txt": parseShapes,
-	}
-
-	for k, v := range  {
-		data[k] = v // collect parsed data
-	}
-  for _, f := range gtfs.File {
-
-    fr, fileErr := f.Open()
-    if fileErr != nil {
-      return fmt.Errorf("Failed to open GTFS file for exporting.")
-    }
-
-    // todo: improve below to stream/pipe directly into file
-
-    fb, readErr := ioutil.ReadAll(fr)
-    if readErr != nil {
-      return fmt.Errorf("Failed to read GTFS file for exporting.")
-    }
-
-    ioutil.WriteFile(dir+f.Name, fb, 0444)
-  }
-
-  return
-}
-*/

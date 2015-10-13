@@ -1,9 +1,10 @@
 package main
 
 import (
+  "os"
+  "flag"
   "log"
   "strings"
-  "os"
   "regexp"
   "net/http"
   "archive/zip"
@@ -29,35 +30,59 @@ func getOptions() (map[string]interface{}, error) {
 
   // setup default options
   options := map[string]interface{}{
-    "dir":        "gtfs-output/", // output dir
-    "name":       "gtfs.sqlite", // output sqlite db name
-    "extras":     true, // extra output formats (*.csv, *.json, *.xml)
-    "spatialite": true, // include sqlite3 spatialite extension
-    "server":     false, // start a basic HTTP server
+    "gtfs":         "", // path to GTFS source file
+    "dir":          "gtfs-output/", // output dir
+    "name":         "gtfs.sqlite", // output sqlite db name
+    "skip-extras":  false, // skip extra output formats (*.csv, *.json, *.xml)
+    "spatialite":   false, // include sqlite3 spatialite extension
+    "server":       false, // start a basic HTTP server
   }
 
-  // todo: parse flag options
+  // parse flags from CLI
+  var optDir, optName string
+  var optSkipExtras, optSpat, optServer bool
+  flag.StringVar(&optDir, "dir", options["dir"].(string),
+    "Output file directory.")
+  flag.StringVar(&optName, "name", options["name"].(string),
+    "Output sqlite filename.")
+  flag.BoolVar(&optSkipExtras, "skip-extras", options["skip-extras"].(bool),
+    "Skip extra export file formats (csv, json, geojson, kml).")
+  flag.BoolVar(&optSpat, "spatialite", options["spatialite"].(bool),
+    "Include spatialite-enabled sqlite tables.")
+  flag.BoolVar(&optServer, "server", options["server"].(bool),
+    "Run HTTP server to demo output files.")
+  flag.Parse()
 
-  optDir := options["dir"].(string)
-  optName := options["name"].(string)
-  optExtras := options["extras"].(bool)
-  optSpat := options["spatialite"].(bool)
-  optServer := options["server"].(bool)
+  // parse first non-flag argument
+  optGTFS := flag.Arg(0)
 
-  // option cleanup
-  optDir = strings.Trim(optDir, "/")+"/"  // dir trailing slash
-  if mkdirErr := os.MkdirAll(optDir, 0777); mkdirErr != nil { // dir exists
+  // ensure GTFS path is set
+  if optGTFS == "" {
+    return nil, fmt.Errorf(
+      "Missing GTFS file argument. (Expected URL or local *.zip file.)")
+  }
+
+  // ensure dir trailing slash
+  optDir = strings.Trim(optDir, "/")+"/"
+
+  // ensure dir exists
+  if mkdirErr := os.MkdirAll(optDir, 0777); mkdirErr != nil {
     return nil, mkdirErr
   }
-  optName = optDir+optName // db within output dir
-  if rmErr := os.Remove(optName); // remove existing db
-    rmErr !=nil && os.IsNotExist(rmErr) == false {
+
+  // ensure db within output dir
+  optName = optDir+optName
+
+  // remove existing db
+  if rmErr := os.Remove(optName);
+    rmErr != nil && os.IsNotExist(rmErr) == false {
     return nil, rmErr
   }
 
+  options["gtfs"] = optGTFS
   options["dir"] = optDir
   options["name"] = optName
-  options["extras"] = optExtras
+  options["skip-extras"] = optSkipExtras
   options["spatialite"] = optSpat
   options["server"] = optServer
 
@@ -65,22 +90,55 @@ func getOptions() (map[string]interface{}, error) {
 }
 
 /**
- * Retrieves GTFS file from URL or local.
+ * Helper: Determines if valid GTFS file.
  */
-func getGTFS() (*zip.Reader, error) {
+func isGTFS(name string) (valid bool, required bool) {
+  switch name {
 
-  // expect path to be passed as first argument
-  if len(os.Args) <= 1 {
-    return nil, fmt.Errorf(
-      "Missing GTFS file argument. (Expected URL or local *.zip file.)")
+    // valid, required GTFS files
+    case "agency.txt":
+      fallthrough
+    case "stops.txt":
+      fallthrough
+    case "routes.txt":
+      fallthrough
+    case "trips.txt":
+      fallthrough
+    case "stop_times.txt":
+      fallthrough
+    case "calendar.txt":
+      required = true
+      fallthrough
+
+    // valid, optional GTFS files
+    case "calendar_dates.txt":
+      fallthrough
+    case "fare_attributes.txt":
+      fallthrough
+    case "fare_rules.txt":
+      fallthrough
+    case "shapes.txt":
+      fallthrough
+    case "frequencies.txt":
+      fallthrough
+    case "transfers.txt":
+      fallthrough
+    case "feed_info.tx":
+      valid = true
   }
 
-  // determine type of path
-  path := os.Args[1]
+  return
+}
+
+/**
+ * Retrieves GTFS file from URL or local.
+ */
+func getGTFS(path string) (*zip.Reader, error) {
   var zipBytes []byte
 
-  // download and read remote file
+  // determine type of path:
   if regexp.MustCompile("^https?://").Match([]byte(path)) {
+    // download and read remote file
 
     resp, httpErr := http.Get(path)
     if httpErr != nil {
@@ -99,7 +157,8 @@ func getGTFS() (*zip.Reader, error) {
 
     zipBytes = zb
 
-  } else { // read local file
+  } else {
+    // read local file
 
     zb, readErr := ioutil.ReadFile(path)
     if readErr != nil {
@@ -144,6 +203,10 @@ func createSqliteGTFS(name string, gtfs *zip.Reader) (*sql.DB, error) {
 
   // begin directly importing each GTFS file (csv)
   for _, f := range gtfs.File {
+    if valid, _ := isGTFS(f.Name); valid == false {
+      continue // skip non-GTFS standard files
+    }
+
     tablename := f.Name[:len(f.Name)-4] // trim ".txt"
 
     fr, fileErr := f.Open()
@@ -169,6 +232,9 @@ func createSqliteGTFS(name string, gtfs *zip.Reader) (*sql.DB, error) {
         "Failed to create table `%s` in sqlite db.", tablename)
     }
 
+    // disable error when too few fields
+    cr.FieldsPerRecord = -1
+
     // ... prepare row values and insert
     //     into table (500 rows at a time)
     //     until end of file (EOF)
@@ -192,11 +258,21 @@ func createSqliteGTFS(name string, gtfs *zip.Reader) (*sql.DB, error) {
 
           // otherwise, log bad error
           return nil, fmt.Errorf(
-            "Failed to read GTFS csv for db importing [%s].", f.Name)
+            "Failed to read GTFS csv for db importing [%s] %s.", f.Name, crErr)
         }
 
+        // ensure proper number of fields
+        row := make([]string, len(header))
+        copy(row, r)
+
         // collect in sql-insert-ready format
-        values[i] = fmt.Sprintf(`("%s")`, strings.Join(r, `","`))
+        values[i] = fmt.Sprintf(`("%s")`, strings.Join(row, `","`))
+      }
+
+      // extra case handler for empty rows
+      if len(values) == 0 {
+        isEOF = true
+        continue // exit writing
       }
 
       // ... and insert into table
@@ -207,7 +283,7 @@ func createSqliteGTFS(name string, gtfs *zip.Reader) (*sql.DB, error) {
         strings.Join(values, ", ")));
         insertTableErr != nil {
         return nil, fmt.Errorf(
-          "Failed to insert rows for `%s` in sqlite db.", tablename)
+          "Failed to insert rows for `%s` in sqlite db. %s", tablename, insertTableErr)
       }
     }
   }
@@ -224,44 +300,51 @@ func main() {
     log.Fatalf("Could not prepare run options: %v", optErr)
   }
 
+  optGTFS := opts["gtfs"].(string)
   optDir := opts["dir"].(string)
   optName := opts["name"].(string)
   optSpat := opts["spatialite"].(bool)
-  optExtras := opts["extras"].(bool)
+  optSkipExtras := opts["skip-extras"].(bool)
+  // optServer := opts["server"].(bool)
 
   // grab GTFS zip file
   log.Print("GTFS: Parsing zip file...")
 
-  gtfs, gtfsErr := getGTFS();
+  gtfs, gtfsErr := getGTFS(optGTFS);
   if gtfsErr != nil {
     log.Fatalf("Could not get GTFS file: %v", gtfsErr)
   }
+
   log.Print("GTFS: Ready to go!")
 
   // create sqlite db with GTFS files imported
   log.Print("Sqlite: Creating db with GTFS...")
+
   db, sqliteErr := createSqliteGTFS(optName, gtfs)
   if sqliteErr != nil {
     log.Fatalf("Could not create sqlite db: %v", sqliteErr)
   }
   defer db.Close() // close when everything is done
+
   log.Print("Sqlite: Ready to go!")
 
+
   // extra export formats
-  if optExtras {
+  if optSkipExtras == false {
     log.Print("Extras: Exporting additional formats...")
 
-    // csv export dumps GTFS zip files directly
+    // note: exportCSV uses "gtfs" directly
     if csvErr := exportCSV(optDir, gtfs); csvErr != nil {
       log.Fatalf("Could not export CSV format: %v", csvErr)
     }
+
     log.Print("Extras: CSV ready to go!")
 
-    // other formats require sqlite db connection
-    // if jsonErr := exportJSON(optDir, db); jsonErr != nil {
-    //   log.Fatalf("Could not export JSON format: %v", jsonErr)
-    // }
-    // log.Print("Extras: JSON ready to go!")
+    if jsonErr := exportJSON(optDir, db); jsonErr != nil {
+      log.Fatalf("Could not export JSON format: %v", jsonErr)
+    }
+
+    log.Print("Extras: JSON ready to go!")
   }
 
   // build extra spatial tables
@@ -271,6 +354,7 @@ func main() {
     if spatErr := buildSpatial(optName); spatErr != nil {
       log.Fatalf("Could not build spatial: %v", spatErr)
     }
+
     log.Print("Spatialite: Ready to go!")
   }
 }
