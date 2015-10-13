@@ -35,12 +35,11 @@ func getOptions() (map[string]interface{}, error) {
     "name":         "gtfs.sqlite", // output sqlite db name
     "skip-extras":  false, // skip extra output formats (*.csv, *.json, *.xml)
     "spatialite":   false, // include sqlite3 spatialite extension
-    "server":       false, // start a basic HTTP server
   }
 
   // parse flags from CLI
   var optDir, optName string
-  var optSkipExtras, optSpat, optServer bool
+  var optSkipExtras, optSpat bool
   flag.StringVar(&optDir, "dir", options["dir"].(string),
     "Output file directory.")
   flag.StringVar(&optName, "name", options["name"].(string),
@@ -49,8 +48,6 @@ func getOptions() (map[string]interface{}, error) {
     "Skip extra export file formats (csv, json, geojson, kml).")
   flag.BoolVar(&optSpat, "spatialite", options["spatialite"].(bool),
     "Include spatialite-enabled sqlite tables.")
-  flag.BoolVar(&optServer, "server", options["server"].(bool),
-    "Run HTTP server to demo output files.")
   flag.Parse()
 
   // parse first non-flag argument
@@ -84,7 +81,6 @@ func getOptions() (map[string]interface{}, error) {
   options["name"] = optName
   options["skip-extras"] = optSkipExtras
   options["spatialite"] = optSpat
-  options["server"] = optServer
 
   return options, nil
 }
@@ -305,7 +301,6 @@ func main() {
   optName := opts["name"].(string)
   optSpat := opts["spatialite"].(bool)
   optSkipExtras := opts["skip-extras"].(bool)
-  // optServer := opts["server"].(bool)
 
   // grab GTFS zip file
   log.Print("GTFS: Parsing zip file...")

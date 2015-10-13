@@ -22,12 +22,12 @@ todo.
       -name
         	Output sqlite filename. (default "gtfs.sqlite")
 
-      -server
-        	Run HTTP server to demo output files.
-
       -skip-extras
         	Skip extra export file formats (csv, json, geojson, kml).
 
       -spatialite
         	Include spatialite-enabled sqlite tables.
 ```
+
+## Spatialite Notes
+todo.
