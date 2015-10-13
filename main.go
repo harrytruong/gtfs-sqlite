@@ -14,7 +14,7 @@ import (
 
   "database/sql"
   "fmt"
-  "github.com/mattn/go-sqlite3"
+  _ "github.com/mattn/go-sqlite3"
 )
 
 // Limit for reading rows from GTFS csv file, during `importGTFS()`
@@ -25,66 +25,76 @@ const csvReadRowsLimit = 500
 /**
  * Retrives CLI options.
  */
-func getOptions() (options map[string]interface{}) {
+func getOptions() (map[string]interface{}, error) {
 
   // setup default options
-  options = map[string]interface{}{
+  options := map[string]interface{}{
     "dir":        "gtfs-output/", // output dir
     "name":       "gtfs.sqlite", // output sqlite db name
-    "spatialite": true, // include sqlite3 spatialite extension
     "extras":     true, // extra output formats (*.csv, *.json, *.xml)
+    "spatialite": true, // include sqlite3 spatialite extension
+    "server":     false, // start a basic HTTP server
   }
 
   // todo: parse flag options
 
   optDir := options["dir"].(string)
   optName := options["name"].(string)
-  optSpat := options["spatialite"].(bool)
   optExtras := options["extras"].(bool)
+  optSpat := options["spatialite"].(bool)
+  optServer := options["server"].(bool)
 
   // option cleanup
   optDir = strings.Trim(optDir, "/")+"/"  // dir trailing slash
-  os.MkdirAll(optDir, 0777)  // dir exists
+  if mkdirErr := os.MkdirAll(optDir, 0777); mkdirErr != nil { // dir exists
+    return nil, mkdirErr
+  }
   optName = optDir+optName // db within output dir
-  os.Remove(optName) // remove existing db
+  if rmErr := os.Remove(optName); // remove existing db
+    rmErr !=nil && os.IsNotExist(rmErr) == false {
+    return nil, rmErr
+  }
 
   options["dir"] = optDir
   options["name"] = optName
   options["extras"] = optExtras
   options["spatialite"] = optSpat
+  options["server"] = optServer
 
-  return
+  return options, nil
 }
 
 /**
  * Retrieves GTFS file from URL or local.
  */
-func getGTFS() (z *zip.Reader) {
+func getGTFS() (*zip.Reader, error) {
 
   // expect path to be passed as first argument
   if len(os.Args) <= 1 {
-    log.Fatal("Missing GTFS file argument. (Expected URL or local *.zip file.)")
+    return nil, fmt.Errorf(
+      "Missing GTFS file argument. (Expected URL or local *.zip file.)")
   }
 
   // determine type of path
   path := os.Args[1]
-  isHTTP := regexp.MustCompile("^https?://").Match([]byte(path))
   var zipBytes []byte
 
-  if isHTTP { // download and read remote file
+  // download and read remote file
+  if regexp.MustCompile("^https?://").Match([]byte(path)) {
 
     resp, httpErr := http.Get(path)
     if httpErr != nil {
-      log.Fatalf("Failed to download file.", httpErr)
+      return nil, fmt.Errorf("Failed to download file.", httpErr)
     }
 
     if resp.StatusCode >= 400 {
-      log.Fatalf("Failed to download file [HTTP %v].", resp.StatusCode)
+      return nil, fmt.Errorf(
+        "Failed to download file [HTTP %v].", resp.StatusCode)
     }
 
     zb, readErr := ioutil.ReadAll(resp.Body)
     if readErr != nil {
-      log.Fatal("Failed to read downloaded file.")
+      return nil, fmt.Errorf("Failed to read downloaded file.")
     }
 
     zipBytes = zb
@@ -93,7 +103,7 @@ func getGTFS() (z *zip.Reader) {
 
     zb, readErr := ioutil.ReadFile(path)
     if readErr != nil {
-      log.Fatal("Failed to read local file.")
+      return nil, fmt.Errorf("Failed to read local file.")
     }
 
     zipBytes = zb
@@ -101,61 +111,36 @@ func getGTFS() (z *zip.Reader) {
 
   // create and return zip.Reader
   bytesReader := bytes.NewReader(zipBytes)
-  z, zipErr := zip.NewReader(bytesReader, bytesReader.Size())
+  zipReader, zipErr := zip.NewReader(bytesReader, bytesReader.Size())
   if zipErr != nil {
-    log.Fatal("Failed to parse zip file.")
+    return nil, fmt.Errorf("Failed to parse zip file.")
   }
 
-  return
+  return zipReader, nil
 }
 
 /**
- * Initialize new sqlite (w/ spatialite ext) db.
+ * Initialize new sqlite db with GTFS data.
+ * Note: Remember to db.Close() when done!
  */
-func newSqliteDB(name string, useSpatialite bool) (db *sql.DB) {
-  sqlDriver := "sqlite3"
-
-  if useSpatialite {
-
-    // register sqlite driver, w/ spatialite ext
-    sql.Register("spatialite",
-      &sqlite3.SQLiteDriver{
-        Extensions: []string{
-
-          // note: needs to exist on system
-          "libspatialite",
-        },
-      })
-
-    sqlDriver = "spatialite"
-  }
+func createSqliteGTFS(name string, gtfs *zip.Reader) (*sql.DB, error) {
 
   // open new db connection
-  db, dbErr := sql.Open(sqlDriver, name)
+  db, dbErr := sql.Open("sqlite3", name)
   if dbErr != nil {
-    log.Fatal("Failed to create new sqlite db.")
+    return nil, fmt.Errorf("Failed to create new sqlite db.")
   }
-
-  // defer db.Close() // close later on (?)
 
   // confirm sqlite version
-  var sqlVer string
-  sqlErr := db.QueryRow("select sqlite_version();").Scan(&sqlVer)
-  if sqlErr != nil {
-    log.Fatal("Failed to call `sqlite_version()` on sqlite db.")
-  }
+  // var sqlVer string
+  // sqlErr := db.QueryRow("select sqlite_version();").Scan(&sqlVer)
+  // if sqlErr != nil {
+  //   return fmt.Errorf("Failed to call `sqlite_version()` on sqlite db.")
+  // }
 
   // output for debugging
-  log.Printf("Successfully created: %s", name)
-  log.Printf("SQLite Version: %v", sqlVer)
-
-  return
-}
-
-/**
- * Import GTFS csv data into sqlite db.
- */
-func importGTFS(db *sql.DB, gtfs *zip.Reader) {
+  // log.Printf("Successfully created: %s", name)
+  // log.Printf("SQLite Version: %v", sqlVer)
 
   // begin directly importing each GTFS file (csv)
   for _, f := range gtfs.File {
@@ -163,23 +148,25 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) {
 
     fr, fileErr := f.Open()
     if fileErr != nil {
-      log.Fatal("Failed to open GTFS file for db importing.")
+      return nil, fmt.Errorf(
+        "Failed to open GTFS `%s` for db importing.", f.Name)
     }
 
     cr := csv.NewReader(fr)
     header, headerErr := cr.Read()
     if headerErr != nil {
-      log.Fatalf("Failed to read GTFS csv for db importing [%s].", f.Name)
+      return nil, fmt.Errorf(
+        "Failed to read GTFS `%s` for db importing.", f.Name)
     }
 
     // create new table...
-    _, createTableErr := db.Exec(fmt.Sprintf(
+    if _, createTableErr := db.Exec(fmt.Sprintf(
       "create table %s (%s text);",
       tablename,
-      strings.Join(header, " text, "),
-    ))
-    if createTableErr != nil {
-      log.Fatalf("Failed to create table `%s` in sqlite db.", tablename)
+      strings.Join(header, " text, ")));
+      createTableErr != nil {
+      return nil, fmt.Errorf(
+        "Failed to create table `%s` in sqlite db.", tablename)
     }
 
     // ... prepare row values and insert
@@ -204,7 +191,8 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) {
           }
 
           // otherwise, log bad error
-          log.Fatalf("Failed to read GTFS csv for db importing [%s].", f.Name)
+          return nil, fmt.Errorf(
+            "Failed to read GTFS csv for db importing [%s].", f.Name)
         }
 
         // collect in sql-insert-ready format
@@ -212,44 +200,77 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) {
       }
 
       // ... and insert into table
-      _, insertTableErr := db.Exec(fmt.Sprintf(
+      if _, insertTableErr := db.Exec(fmt.Sprintf(
         "insert into %s (%s) values %s;",
         tablename,
         strings.Join(header, ", "),
-        strings.Join(values, ", "),
-      ))
-      if insertTableErr != nil {
-        log.Fatalf("Failed to insert rows for `%s` in sqlite db.", tablename)
+        strings.Join(values, ", ")));
+        insertTableErr != nil {
+        return nil, fmt.Errorf(
+          "Failed to insert rows for `%s` in sqlite db.", tablename)
       }
     }
   }
 
   // output for debugging
-  log.Print("Imported GTFS successfully.")
+  // log.Print("Imported GTFS files successfully.")
+
+  return db, nil
 }
 
-
 func main() {
-  opts := getOptions()
+  opts, optErr := getOptions()
+  if optErr != nil {
+    log.Fatalf("Could not prepare run options: %v", optErr)
+  }
+
   optDir := opts["dir"].(string)
   optName := opts["name"].(string)
   optSpat := opts["spatialite"].(bool)
   optExtras := opts["extras"].(bool)
 
   // grab GTFS zip file
-  gtfs := getGTFS()
+  log.Print("GTFS: Parsing zip file...")
 
-  // setup new sqlite db
-  db := newSqliteDB(optName, optSpat)
-  importGTFS(db, gtfs) // dump gtfs to db
-
-  // build extra spatial tables
-  if optSpat {
-    buildSpatial(db, gtfs)
+  gtfs, gtfsErr := getGTFS();
+  if gtfsErr != nil {
+    log.Fatalf("Could not get GTFS file: %v", gtfsErr)
   }
+  log.Print("GTFS: Ready to go!")
+
+  // create sqlite db with GTFS files imported
+  log.Print("Sqlite: Creating db with GTFS...")
+  db, sqliteErr := createSqliteGTFS(optName, gtfs)
+  if sqliteErr != nil {
+    log.Fatalf("Could not create sqlite db: %v", sqliteErr)
+  }
+  defer db.Close() // close when everything is done
+  log.Print("Sqlite: Ready to go!")
 
   // extra export formats
   if optExtras {
-    exportExtras(optDir, gtfs)
+    log.Print("Extras: Exporting additional formats...")
+
+    // csv export dumps GTFS zip files directly
+    if csvErr := exportCSV(optDir, gtfs); csvErr != nil {
+      log.Fatalf("Could not export CSV format: %v", csvErr)
+    }
+    log.Print("Extras: CSV ready to go!")
+
+    // other formats require sqlite db connection
+    // if jsonErr := exportJSON(optDir, db); jsonErr != nil {
+    //   log.Fatalf("Could not export JSON format: %v", jsonErr)
+    // }
+    // log.Print("Extras: JSON ready to go!")
+  }
+
+  // build extra spatial tables
+  if optSpat {
+    log.Print("Spatialite: Updating db with geo tables...")
+
+    if spatErr := buildSpatial(optName); spatErr != nil {
+      log.Fatalf("Could not build spatial: %v", spatErr)
+    }
+    log.Print("Spatialite: Ready to go!")
   }
 }
