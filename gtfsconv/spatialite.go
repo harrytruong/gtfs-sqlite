@@ -185,7 +185,7 @@ func buildSpatialStops(db *sql.DB) error {
   // process each existing "stops.stop_id" into "stops_geo"
   if _, iErr := db.Exec("insert into stops_geo (stop_id, geom) " +
                       "select stop_id, geomfromtext(" +
-                        "'POINT('||stop_lat||' '||stop_lon||')'" +
+                        "'POINT('||stop_lon||' '||stop_lat||')'" +
                       ", 4326) from stops;");
     iErr != nil {
     return fmt.Errorf("failed to insert rows into `stops_geo` [%s]", iErr)
