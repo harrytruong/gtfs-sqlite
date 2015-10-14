@@ -38,18 +38,14 @@ func buildSpatialite(name string) (*sql.DB, error) {
   // check for spatialite metadata tables
   if hasDBTable(db, "geometry_columns") == false ||
      hasDBTable(db, "spatial_ref_sys") == false {
+     if _, initErr := db.Exec(
 
-     // drop existing tables (for safety)
-     _, dgcErr := db.Exec("drop table if exists geometry_columns;")
-     _, dsrsErr := db.Exec("drop table if exists spatial_ref_sys;")
-    if dgcErr != nil || dsrsErr != nil {
-       return nil, fmt.Errorf(
-         "failed to drop prev spatial metadata tables [%s, %s]",
-         dgcErr, dsrsErr)
-     }
+       // drop existing meta tables (for safety)
+       "drop table if exists geometry_columns;" +
+       "drop table if exists spatial_ref_sys;" +
 
-     // initialize spatialite metadata
-     if _, initErr := db.Exec("select InitSpatialMetaData();");
+       // initialize spatialite metadata
+       "select InitSpatialMetaData();");
        initErr != nil {
        return nil, fmt.Errorf(
          "failed to call `InitSpatialMetaData()` [%s]", initErr)
@@ -94,22 +90,20 @@ func buildSpatialShapes(db *sql.DB) error {
     }
 
     // otherwise, drop for rebuilding
-    if _, dgErr := db.Exec("drop table shapes_geo;"); dgErr != nil {
+    if _, dgErr := db.Exec(
+      "select DiscardGeometryColumn('shapes_geo', 'geom'); " +
+      "drop table shapes_geo;"); dgErr != nil {
       return fmt.Errorf("failed to drop prev shapes_geo table [%s]", dgErr)
     }
   }
 
   // create new "shapes_geo" table
-  if _, cErr := db.Exec("create table shapes_geo (shape_id text);");
+  // with spatialite geometry column
+  if _, cErr := db.Exec(
+    "create table shapes_geo (shape_id text);" +
+    "select AddGeometryColumn('shapes_geo', 'geom', 4326, 'LINESTRING');");
     cErr != nil {
     return fmt.Errorf("failed to create table `shapes_geo` [%s]", cErr)
-  }
-
-  // add spatialite geometry column
-  if _, gErr := db.Exec("select AddGeometryColumn" +
-                      "('shapes_geo', 'geom', 4326, 'LINESTRING');");
-    gErr != nil {
-    return fmt.Errorf("failed to add column `shapes_geo.geom` [%s]", gErr)
   }
 
   // process each existing "shapes.shape_id" into "shapes_geo"
@@ -164,22 +158,20 @@ func buildSpatialStops(db *sql.DB) error {
     }
 
     // otherwise, drop for rebuilding
-    if _, dgErr := db.Exec("drop table stops_geo;"); dgErr != nil {
+    if _, dgErr := db.Exec(
+      "select DiscardGeometryColumn('stops_geo', 'geom'); " +
+      "drop table stops_geo;"); dgErr != nil {
       return fmt.Errorf("failed to drop prev stops_geo table [%s]", dgErr)
     }
   }
 
   // create new "stops_geo" table
-  if _, cErr := db.Exec("create table stops_geo (stop_id text);");
+  // with spatialite geometry column
+  if _, cErr := db.Exec(
+    "create table stops_geo (stop_id text);" +
+    "select AddGeometryColumn('stops_geo', 'geom', 4326, 'POINT');");
     cErr != nil {
     return fmt.Errorf("failed to create table `stops_geo` [%s]", cErr)
-  }
-
-  // add spatialite geometry column
-  if _, gErr := db.Exec("select AddGeometryColumn" +
-                      "('stops_geo', 'geom', 4326, 'POINT');");
-    gErr != nil {
-    return fmt.Errorf("failed to add column `stops_geo.geom` [%s]", gErr)
   }
 
   // process each existing "stops.stop_id" into "stops_geo"

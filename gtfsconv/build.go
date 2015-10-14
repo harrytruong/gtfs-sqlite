@@ -13,6 +13,7 @@ import (
   "bytes"
   "io"
   "io/ioutil"
+  "unicode/utf8"
 
   "database/sql"
   "fmt"
@@ -228,10 +229,26 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
       return fmt.Errorf("failed to read %s file [%s]", f.Name, hErr)
     }
 
-    // create new table with headers...
-    if _, ctErr := db.Exec(fmt.Sprintf(
+    // trim whitespace from each header
+    for i, v := range header {
+      if i == 0 {  // trim utf8 bom!
+        v = strings.Trim(v, string([]byte{239, 187, 191}))
+      }
+      header[i] = strings.TrimSpace(v)
+    }
+
+    // prepare create table statement
+    ctStmt := fmt.Sprintf(
       "create table %s (%s text);", tablename,
-      strings.Join(header, " text, "))); ctErr != nil {
+      strings.Join(header, " text, "))
+
+    // ensure valid utf8
+    if utf8.ValidString(ctStmt) == false {
+      return fmt.Errorf("encountered invalid utf8 in header")
+    }
+
+    // create new table with headers...
+    if _, ctErr := db.Exec(ctStmt); ctErr != nil {
       return fmt.Errorf("failed to create table %s [%s]", tablename, ctErr)
     }
 
@@ -267,8 +284,18 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
         row := make([]string, len(header))
         copy(row, r)
 
+        // trim whitespace from each value
+        for i, v := range row {
+          row[i] = strings.TrimSpace(v)
+        }
+
         // collect in sql-insert-ready format
         values[i] = fmt.Sprintf(`("%s")`, strings.Join(row, `","`))
+
+        // ensure valid utf8
+        if utf8.ValidString(values[i]) == false {
+          return fmt.Errorf("encountered invalid utf8 in row [%s]", values[i])
+        }
       }
 
       // extra case handler for empty rows
