@@ -1,20 +1,15 @@
-package main
+package gtfsconv
 
 import (
   "os"
   "fmt"
   "database/sql"
-  "io/ioutil"
-  "encoding/json"
+  // "io/ioutil"
+  // "encoding/json"
 )
 
-// Helper: json-like type pattern.
-type jsony map[string]interface{}
-
-/**
- * GeoJSON export of GTFS files.
- */
-func exportGeoJSON(dir string, db *sql.DB, spatialite bool) error {
+// exportGeoJSON creates geojson files from sqlite db.
+func exportGeoJSON(dir string, db *sql.DB) error {
   dir += "geojson/" // export to "geojson" subdir
   stopsDir := dir+"stops/"
   shapesDir := dir+"shapes/"
@@ -30,40 +25,38 @@ func exportGeoJSON(dir string, db *sql.DB, spatialite bool) error {
   }
 
   if stopsErr := exportGeoJSONStops(stopsDir, db); stopsErr != nil {
-    return fmt.Errorf("Failed to export stops: %s", stopsErr)
+    return fmt.Errorf("exportGeoJSONStops() %s", stopsErr)
   }
 
-  if isExistDB("shapes", db) { // only export, if table exists
+  if hasDBTable(db, "shapes") { // only export, if table exists
     if shapesErr := exportGeoJSONShapes(shapesDir, db); shapesErr != nil {
-      return fmt.Errorf("Failed to export shapes: %s", shapesErr)
+      return fmt.Errorf("exportGeoJSONShapes() %s", shapesErr)
     }
 
-    if spatialite { // only export if spatialite is enabled
+    if hasDBSpatialite(db) { // only export if spatialite is enabled
       if pathsErr := exportGeoJSONPaths(pathsDir, db); pathsErr != nil {
-        return fmt.Errorf("Failed to export paths: %s", pathsErr)
+        return fmt.Errorf("exportGeoJSONPaths() %s", pathsErr)
       }
     }
   }
 
-  if isExistDB("transfers", db) { // only export, if table exists
+  if hasDBTable(db, "transfers") { // only export, if table exists
     if transErr := exportGeoJSONTransfers(transfersDir, db); transErr != nil {
-      return fmt.Errorf("Failed to export transfers: %s", transErr)
+      return fmt.Errorf("exportGeoJSONTransfers() %s", transErr)
     }
   }
 
   return nil
 }
 
-/**
- * Helper: Export GeoJSON for "shapes" table.
- */
+// exportGeoJSONShapes Helper: Export GeoJSON for "shapes" table.
 func exportGeoJSONShapes(dir string, db *sql.DB) error {
 
   // retrieve all unique shapes
   shapes, shapesErr := db.Query(
     "select distinct(shape_id) as id from shapes;")
   if shapesErr != nil {
-    return shapesErr
+    return fmt.Errorf("failed to select `distinct(shape_id)` [%s]", shapesErr)
   }
   defer shapes.Close()
 
@@ -71,7 +64,7 @@ func exportGeoJSONShapes(dir string, db *sql.DB) error {
   var features []jsony
   for shapes.Next() {
     if scanErr := shapes.Scan(&id); scanErr != nil {
-      return scanErr
+      return fmt.Errorf("failed to scan shapes query [%s]", scanErr)
     }
 
     // retrive all points for this shape
@@ -81,12 +74,12 @@ func exportGeoJSONShapes(dir string, db *sql.DB) error {
       "select shape_pt_lat, shape_pt_lon from shapes " +
       "where shape_id = ? order by cast(shape_pt_sequence as int) asc;", id)
     if ptErr != nil {
-      return ptErr
+      return fmt.Errorf("failed to select shape points [%s]", ptErr)
     }
     defer points.Close()
     for points.Next() {
       if ptscanErr := points.Scan(&lat, &lng); ptscanErr != nil {
-        return ptscanErr
+        return fmt.Errorf("failed to scan shapes points query [%s]", ptscanErr)
       }
       shapeLine = append(shapeLine, [2]float64{lng, lat})
     }
@@ -103,50 +96,35 @@ func exportGeoJSONShapes(dir string, db *sql.DB) error {
       },
     }
 
+    // write geojson "Feature"
+    if wjErr := writeJSON(dir+"shape."+id+".geojson", feature);
+      wjErr != nil {
+      return fmt.Errorf("writeJSON() %s", wjErr)
+    }
+
+    // and append for later featureCol
     features = append(features, feature)
-
-    // marshall into json []byte
-    fjson, fjErr := json.Marshal(feature)
-    if fjErr != nil {
-      return fjErr
-    }
-
-    // write "Feature" geojson file
-    if wErr := ioutil.WriteFile(dir+"shape."+id+".geojson", fjson, 0666);
-      wErr != nil {
-      return wErr
-    }
   }
 
-  // create geojson "FeatureCollection",
-  // and marshall into json []byte
-  fjson, fjErr := json.Marshal(jsony{
-    "type": "FeatureCollection",
-    "features": features,
-  })
-  if fjErr != nil {
-    return fjErr
-  }
-
-  // write "FeatureCollection" geojson file
-  if wErr := ioutil.WriteFile(dir+"all-shapes.geojson", fjson, 0666);
-    wErr != nil {
-    return wErr
+  // create and write geojson "FeatureCollection"
+  if wjErr := writeJSON(dir+"all-shapes.geojson", jsony{
+      "type": "FeatureCollection",
+      "features": features,
+    }); wjErr != nil {
+    return fmt.Errorf("writeJSON() %s", wjErr)
   }
 
   return nil
 }
 
-/**
- * Helper: Export GeoJSON for "stops" table.
- */
+// exportGeoJSONStops Helper: Export GeoJSON for "stops" table.
 func exportGeoJSONStops(dir string, db *sql.DB) error {
 
   // retrieve all stops
   stops, stopsErr := db.Query(
     "select stop_id, stop_name, stop_lat, stop_lon from stops;")
   if stopsErr != nil {
-    return stopsErr
+    return fmt.Errorf("failed to select stops [%s]", stopsErr)
   }
   defer stops.Close()
 
@@ -156,7 +134,7 @@ func exportGeoJSONStops(dir string, db *sql.DB) error {
   for stops.Next() {
     if scanErr := stops.Scan(&id, &name, &lat, &lng);
       scanErr != nil {
-      return scanErr
+        return fmt.Errorf("failed to scan stops query [%s]", scanErr)
     }
 
     // create geojson "Feature"
@@ -172,48 +150,36 @@ func exportGeoJSONStops(dir string, db *sql.DB) error {
       },
     }
 
-    // marshall into json []byte
-    fjson, fjErr := json.Marshal(feature)
-    if fjErr != nil {
-      return fjErr
+    // write geojson "Feature"
+    if wjErr := writeJSON(dir+"stop."+id+".geojson", feature);
+      wjErr != nil {
+      return fmt.Errorf("writeJSON() %s", wjErr)
     }
 
-    // write "Feature" geojson file
-    if wErr := ioutil.WriteFile(dir+"stop."+id+".geojson", fjson, 0666);
-      wErr != nil {
-      return wErr
-    }
-
-    // and append to featureCol
+    // and append for later featureCol
     features = append(features, feature)
   }
 
-  // create geojson "FeatureCollection",
-  // and marshall into json []byte
-  fjson, fjErr := json.Marshal(jsony{
-    "type": "FeatureCollection",
-    "features": features,
-  })
-  if fjErr != nil {
-    return fjErr
-  }
-
-  // write "FeatureCollection" geojson file
-  if wErr := ioutil.WriteFile(dir+"all-stops.geojson", fjson, 0666);
-    wErr != nil {
-    return wErr
+  // create and write geojson "FeatureCollection"
+  if wjErr := writeJSON(dir+"all-stops.geojson", jsony{
+      "type": "FeatureCollection",
+      "features": features,
+    }); wjErr != nil {
+    return fmt.Errorf("writeJSON() %s", wjErr)
   }
 
   return nil
 }
 
-/**
- * Helper: Export GeoJSON for special intersections of
- *         "stops" with "shapes" data.
- *
- * Note: This requires spatialite to be enabled.
- */
+// exportGeoJSONPaths Helper: Export GeoJSON for special
+// intersections of "stops" with "shapes" data.
+// note: Spatialite extension must be enabled!
 func exportGeoJSONPaths(dir string, db *sql.DB) error {
+
+  // confirm that spatialite extension is loaded
+  if hasDBSpatialite(db) == false {
+    return fmt.Errorf("spatialite not loaded")
+  }
 
   // todo: retrieve all stops and hashmap by coord
   // todo: create new geometry that merges all shapes (lines)
@@ -227,13 +193,12 @@ func exportGeoJSONPaths(dir string, db *sql.DB) error {
 
   return nil
 }
-/**
- * Helper: Export GeoJSON for "transfers" table.
- */
+
+// exportGeoJSONTransfers Helper: Export GeoJSON for "transfers" table.
 func exportGeoJSONTransfers(dir string, db *sql.DB) error {
 
   // retrieve all transfers w/ stop
-  transfers, transfersErr := db.Query(
+  transfers, transErr := db.Query(
     "select t.'from_stop_id', t.'to_stop_id', t.'transfer_type', " +
     "sf.'stop_lat' as sflat, sf.'stop_lon' as sflon, " +
     "st.'stop_lat' as stlat, st.'stop_lon' as stlon " +
@@ -241,8 +206,8 @@ func exportGeoJSONTransfers(dir string, db *sql.DB) error {
     "left join 'stops' sf on t.'from_stop_id' = sf.'stop_id' " +
     "left join 'stops' st on t.'to_stop_id' = st.'stop_id' " +
     "where t.'from_stop_id' != t.'to_stop_id';")
-  if transfersErr != nil {
-    return transfersErr
+  if transErr != nil {
+    return fmt.Errorf("failed to select transfers joined stops [%s]", transErr)
   }
   defer transfers.Close()
 
@@ -254,7 +219,7 @@ func exportGeoJSONTransfers(dir string, db *sql.DB) error {
     if scanErr := transfers.Scan(
       &from, &to, &trans, &flat, &flng, &tlat, &tlng);
       scanErr != nil {
-      return scanErr
+        return fmt.Errorf("failed to scan transfers query [%s]", scanErr)
     }
 
     // create geojson "Feature"
@@ -274,37 +239,22 @@ func exportGeoJSONTransfers(dir string, db *sql.DB) error {
       },
     }
 
-    // marshall into json []byte
-    fjson, fjErr := json.Marshal(feature)
-    if fjErr != nil {
-      return fjErr
-    }
-
-    // write "Feature" geojson file
-    if wErr := ioutil.WriteFile(
-      dir+"transfer."+from+"-"+to+".geojson", fjson, 0666);
-      wErr != nil {
-      return wErr
+    // write geojson "Feature"
+    if wjErr := writeJSON(dir+"transfer."+from+"-"+to+".geojson", feature);
+      wjErr != nil {
+      return fmt.Errorf("writeJSON() %s", wjErr)
     }
 
     // and append to featureCol
     features = append(features, feature)
   }
 
-  // create geojson "FeatureCollection",
-  // and marshall into json []byte
-  fjson, fjErr := json.Marshal(jsony{
-    "type": "FeatureCollection",
-    "features": features,
-  })
-  if fjErr != nil {
-    return fjErr
-  }
-
-  // write "FeatureCollection" geojson file
-  if wErr := ioutil.WriteFile(dir+"all-transfers.geojson", fjson, 0666);
-    wErr != nil {
-    return wErr
+  // create and write geojson "FeatureCollection"
+  if wjErr := writeJSON(dir+"all-transfers.geojson", jsony{
+      "type": "FeatureCollection",
+      "features": features,
+    }); wjErr != nil {
+    return fmt.Errorf("writeJSON() %s", wjErr)
   }
 
   return nil
