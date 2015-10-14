@@ -127,6 +127,22 @@ func isGTFS(name string) (valid bool, required bool) {
 }
 
 /**
+ * Helper: Check if table exists in sqlite db.
+ */
+func isExistDB(name string, db *sql.DB) bool {
+  // Note: Must db.QueryRow & .Scan() in order
+  //       for query error to be returned.
+  var tableExists string
+  if queryErr := db.QueryRow(
+    "select name from sqlite_master " +
+    "where type='table' AND name='"+name+"';").Scan(&tableExists);
+    queryErr != nil {
+    return false // could not find table
+  }
+  return true // table exists
+}
+
+/**
  * Retrieves GTFS file from URL or local.
  */
 func getGTFS(path string) (*zip.Reader, error) {
@@ -323,33 +339,47 @@ func main() {
 
   log.Print("Sqlite: Ready to go!")
 
+  // build extra spatial tables
+  if optSpat {
+    log.Print("Spatialite: Updating db with geo tables...")
+
+    spatDb, spatErr := buildSpatial(optName);
+    if spatErr != nil {
+      log.Fatalf("Could not build spatial: %v", spatErr)
+    }
+
+    db.Close() // immediately close old connection
+    db = spatDb // use spatialite-enhanced db connection
+
+    log.Print("Spatialite: Ready to go!")
+  }
 
   // extra export formats
   if optSkipExtras == false {
     log.Print("Extras: Exporting additional formats...")
 
-    // note: exportCSV uses "gtfs" directly
+    // export csv based on "gtfs" directly
     if csvErr := exportCSV(optDir, gtfs); csvErr != nil {
       log.Fatalf("Could not export CSV format: %v", csvErr)
     }
 
     log.Print("Extras: CSV ready to go!")
 
+    // export json based on sqlite db
     if jsonErr := exportJSON(optDir, db); jsonErr != nil {
       log.Fatalf("Could not export JSON format: %v", jsonErr)
     }
 
     log.Print("Extras: JSON ready to go!")
-  }
 
-  // build extra spatial tables
-  if optSpat {
-    log.Print("Spatialite: Updating db with geo tables...")
-
-    if spatErr := buildSpatial(optName); spatErr != nil {
-      log.Fatalf("Could not build spatial: %v", spatErr)
+    // export geojson based sqlitedb
+    if geojsonErr := exportGeoJSON(optDir, db, optSpat); geojsonErr != nil {
+      log.Fatalf("Could not export GeoJSON format: %v", geojsonErr)
     }
 
-    log.Print("Spatialite: Ready to go!")
+    log.Print("Extras: GeoJSON ready to go!")
   }
+
+  // yay, finished.
+  log.Print("Finished, and all ready to go! Enjoy!")
 }

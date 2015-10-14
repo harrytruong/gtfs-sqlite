@@ -10,11 +10,11 @@ import (
 /**
  * Build spatialite-enhanced sqlite tables.
  */
-func buildSpatial(name string) error {
+func buildSpatial(name string) (*sql.DB, error) {
 
   // ensure sqlite db exists
   if _, err := os.Stat(name); os.IsNotExist(err) {
-    return fmt.Errorf(
+    return nil, fmt.Errorf(
       "Failed to build spatialite table (sqlite db not found).")
   }
 
@@ -31,23 +31,22 @@ func buildSpatial(name string) error {
   // open new db connection
   db, dbErr := sql.Open("spatialite", name)
   if dbErr != nil {
-    return fmt.Errorf(
+    return nil, fmt.Errorf(
       "Failed to open sqlite db with spatialite driver.")
   }
-  defer db.Close()
 
   // confirm spatialite loaded
   var spatVer string
   if spatErr := db.QueryRow("select spatialite_version();").Scan(&spatVer);
     spatErr != nil {
-    return fmt.Errorf(
+    return nil, fmt.Errorf(
       "Failed to call `spatialite_version()` on sqlite db.")
   }
 
   // initialize spatialite metadata
   if _, spatInitErr := db.Exec("select InitSpatialMetaData();");
     spatInitErr != nil {
-    return fmt.Errorf(
+    return nil, fmt.Errorf(
       "Failed to call `InitSpatialMetaData()` on sqlite db.")
   }
 
@@ -55,24 +54,21 @@ func buildSpatial(name string) error {
   // log.Printf("Spatialite Version: %s", spatVer)
   // log.Print("Successfully initialized metadata.")
 
-  if spatStopsErr := buildSpatialStops(db); spatStopsErr != nil {
-    return fmt.Errorf(
-      "Failed to build `stops_geo` table on sqlite db: %v", spatStopsErr)
+  if stopsErr := buildSpatialStops(db); stopsErr != nil {
+    return nil, fmt.Errorf(
+      "Failed to build `stops_geo` table on sqlite db: %v", stopsErr)
   }
 
-  var tblExist string
-  if err := db.QueryRow( // check if "shapes" table exists
-    "select name from sqlite_master "+
-    "where type='table' AND name='shapes';").Scan(&tblExist); err == nil {
-    if spatShapesErr := buildSpatialShapes(db); spatShapesErr != nil {
-      return fmt.Errorf(
-        "Failed to build `shapes_geo` table on sqlite db: %v", spatShapesErr)
+  if isExistDB("shapes", db) { // only build, if table exists
+    if shapesErr := buildSpatialShapes(db); shapesErr != nil {
+      return nil, fmt.Errorf(
+        "Failed to build `shapes_geo` table on sqlite db: %v", shapesErr)
     }
   }
 
   // log.Print("Successfully built spatialite tables.")
 
-  return nil
+  return db, nil
 }
 
 /**

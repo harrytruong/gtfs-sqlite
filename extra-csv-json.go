@@ -78,12 +78,8 @@ func exportJSON(dir string, db *sql.DB) error {
   for _, tbl := range gtfsTables {
 
     // check if table exists
-    var tblExist string
-    if tblErr := db.QueryRow(
-      "select name from sqlite_master " +
-      "where type='table' AND name='"+tbl+"';").Scan(&tblExist);
-      tblErr != nil {
-      continue
+    if isExistDB(tbl, db) == false {
+      continue // ignore missing tables
     }
 
     // create new general json file
