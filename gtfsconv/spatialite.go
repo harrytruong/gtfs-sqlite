@@ -61,9 +61,9 @@ func buildSpatialite(name string) (*sql.DB, error) {
       return nil, fmt.Errorf("buildSpatialShapes() %s", shapesErr)
     }
 
-    // if routesErr := buildSpatialRoutes(db); routesErr != nil {
-    //   return nil, fmt.Errorf("buildSpatialRoutes() %s", routesErr)
-    // }
+    if routesErr := buildSpatialRoutes(db); routesErr != nil {
+      return nil, fmt.Errorf("buildSpatialRoutes() %s", routesErr)
+    }
   }
 
   return db, nil
@@ -192,7 +192,8 @@ func buildSpatialShapes(db *sql.DB) error {
 func buildSpatialRoutes(db *sql.DB) error {
 
   // count current number of routes, for sanity checking,
-  numRoutes, nsErr := countDBTable(db, "distinct(route_id)", "routes")
+  numRoutes, nsErr := countDBTable(db,
+    "distinct(route_id||direction_id)", "trips")
   if nsErr != nil {
     return fmt.Errorf("countDBTable() %s", nsErr)
   }
@@ -208,28 +209,74 @@ func buildSpatialRoutes(db *sql.DB) error {
     }
 
     // otherwise, drop for rebuilding
-    if _, dgErr := db.Exec(
-      "select DiscardGeometryColumn('routes_geo', 'geom'); " +
-      "drop table routes_geo;"); dgErr != nil {
+    if _, dgErr := db.Exec(`
+      select DiscardGeometryColumn('routes_geo', 'geom'),
+        DiscardGeometryColumn('routes_geo', 'stopgeom'),
+        DiscardGeometryColumn('routes_geo', 'pathgeom');
+      drop table routes_geo;`); dgErr != nil {
       return fmt.Errorf("failed to drop prev routes_geo table [%s]", dgErr)
     }
   }
 
   // create new "routes_geo" table
   // with spatialite geometry column
-  if _, cErr := db.Exec(
-    "create table routes_geo (route_id text);" +
-    "select AddGeometryColumn('routes_geo', 'geom', 4326, 'MULTILINESTRING');");
+  if _, cErr := db.Exec(`
+  create table routes_geo (route_id text, direction_id text);
+  select AddGeometryColumn('routes_geo', 'geom', 4326, 'MULTILINESTRING'),
+    AddGeometryColumn('routes_geo', 'stopgeom', 4326, 'MULTIPOINT'),
+    AddGeometryColumn('routes_geo', 'pathgeom', 4326, 'MULTILINESTRING');`);
     cErr != nil {
     return fmt.Errorf("failed to create table `routes_geo` [%s]", cErr)
   }
 
-  // st_union all "shapes_geo.geom" into a single multilinestringline,
-  // then st_linemerge all segments into minimal multilinestring,
-  // then st_union all "stops_geo.geom" into a single multipoint,
-  // then st_linescutatnodes multilinestring segments (shapes)
-  //      against multipoints (stops)
-  // and save/insert the final result
+  // select all distinct route:direction
+  rts, rErr := db.Query("select distinct route_id, direction_id from trips;")
+  if rErr != nil {
+    return fmt.Errorf("failed to query distinct trips [%s]", rErr)
+  }
+
+  var routes [][2]string
+  var rid, did string
+  for rts.Next() {
+    if sErr := rts.Scan(&rid, &did); sErr != nil {
+      return fmt.Errorf("failed to scan routes [%s]", sErr)
+    }
+    routes = append(routes, [2]string{rid, did})
+  }
+  rts.Close()
+
+  for _, rt := range routes {
+    rid = rt[0]
+    did = rt[1]
+
+    // generate and insert new routes_geo rows
+    if _, irErr := db.Exec(fmt.Sprintf(`
+    insert into routes_geo
+      (route_id, direction_id, geom, stopgeom, pathgeom)
+
+    select
+      '%s', '%s',
+      castToMulti(SHAPES.geom),
+      castToMulti(STOPS.geom),
+      castToMulti(st_linescutatnodes(SHAPES.geom, STOPS.geom))
+
+    from
+      (select linemerge(st_union(ts.geom)) as geom from
+        (select distinct(t.shape_id), sg.geom as geom
+        from trips t left join shapes_geo sg on t.shape_id = sg.shape_id
+        where t.route_id = '%s' and t.direction_id = '%s') ts) SHAPES
+
+      left join
+      (select st_union(ts.geom) as geom from
+        (select distinct(sg.stop_id), sg.geom as geom
+        from trips t
+          left join stop_times st on t.trip_id = st.trip_id
+          left join stops_geo sg on st.stop_id = sg.stop_id
+        where t.route_id = '%s' and t.direction_id = '%s') ts) STOPS
+      on 1=1;`, rid, did, rid, did, rid, did)); irErr != nil {
+      return fmt.Errorf("failed to generate new row [%s]", irErr)
+    }
+  }
 
   // count "routes_geo" for final sanity check
   numGeo, ngErr := countDBTable(db, "*", "routes_geo")

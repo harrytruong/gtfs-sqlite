@@ -38,6 +38,10 @@ func main() {
 
   // log: starting build
   log.Print("Building: This may take a while, please wait...")
+  if opt.Spatialite {
+    log.Print("Building: With Spatialite enabled, this takes EXTRA long!")
+    log.Print("Building: Please be patient! Good stuff is coming!")
+  }
 
   // run gtfsconv.Build
   if buildErr := gtfsconv.Build(opt); buildErr != nil {
