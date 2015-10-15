@@ -85,16 +85,12 @@ func writeJSON(name string, data interface{}) error {
 
 // hasDBTable Helper: Check if table exists in sqlite db.
 func hasDBTable(db *sql.DB, name string) bool {
-  // Note: Must db.QueryRow & .Scan() in order
-  //       for query error to be returned.
-  var tableExists string
-  if queryErr := db.QueryRow(
-    "select name from sqlite_master " +
-    "where type='table' AND name='"+name+"';").Scan(&tableExists);
-    queryErr != nil {
-    return false // could not find table
+  c, cErr := countDBTable(db, "*",
+    "sqlite_master where type='table' and name='"+name+"'")
+  switch {
+    case cErr != nil: return false
+    default: return c > 0
   }
-  return true // table exists
 }
 
 // countDBTable Helper: Count field from table in sqlite db.
