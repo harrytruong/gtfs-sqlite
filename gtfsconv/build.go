@@ -31,6 +31,7 @@ type Options struct {
   Spatialite  bool    // include sqlite3 spatialite extension
 
   KeepDB      bool    // re-use existing sqlite db (skip creation), if exist
+  SkipClean   bool    // skip agency-specific GTFS cleanup rules
 }
 
 // Default options for Build
@@ -42,6 +43,7 @@ var defaultOptions = Options{
   Spatialite:   false,
 
   KeepDB:       false,
+  SkipClean:    false,
 }
 
 // Limit for reading rows from GTFS csv file, during `importGTFS()`
@@ -89,6 +91,13 @@ func Build(opt Options) error {
   // import GTFS data
   if iErr := importGTFS(db, gtfs); iErr != nil {
     return fmt.Errorf("importGTFS() %s", iErr)
+  }
+
+  // if not skipping, clean GTFS data
+  if opt.SkipClean == false {
+    if cErr := cleanGTFS(db); cErr != nil {
+      return fmt.Errorf("cleanGTFS() %s", cErr)
+    }
   }
 
   // if enabled, build extra spatialite tables
@@ -211,7 +220,7 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
   // ensure gtfs_metadata table
   if hasDBTable(db, "gtfs_metadata") == false {
     if _, cmErr := db.Exec("create table gtfs_metadata " +
-                          "(tablename text, imported_at text);");
+      "(tablename text, imported_at text, cleaned text);");
       cmErr != nil {
       return fmt.Errorf("failed to create gtfs_metadata table [%s]", cmErr)
     }

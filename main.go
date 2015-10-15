@@ -27,6 +27,8 @@ func init() {
     "Include spatialite-enabled sqlite tables.")
   flag.BoolVar(&opt.KeepDB, "keepdb", opt.KeepDB,
     "Reuse existing sqlite db, if exist.")
+  flag.BoolVar(&opt.SkipClean, "skipclean", opt.SkipClean,
+    "Skip applying agency-specific cleanup rules for irregular GTFS files.")
 
   flag.Parse() // parse cli flags
 
