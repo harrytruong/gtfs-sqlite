@@ -4,8 +4,6 @@ import (
   "os"
   "fmt"
   "database/sql"
-  // "io/ioutil"
-  // "encoding/json"
 )
 
 // exportGeoJSON creates geojson files from sqlite db.
@@ -13,12 +11,12 @@ func exportGeoJSON(dir string, db *sql.DB) error {
   dir += "geojson/" // export to "geojson" subdir
   stopsDir := dir+"stops/"
   shapesDir := dir+"shapes/"
-  pathsDir := dir+"paths/"
+  routesDir := dir+"routes/"
   transfersDir := dir+"transfers/"
 
   // ensure dir (and extra subdirs) exists
   for _, d := range [...]string{
-    dir, shapesDir, stopsDir, transfersDir, pathsDir} {
+    dir, shapesDir, stopsDir, transfersDir, routesDir} {
     if mkdirErr := os.MkdirAll(d, 0777); mkdirErr != nil {
       return mkdirErr
     }
@@ -28,14 +26,15 @@ func exportGeoJSON(dir string, db *sql.DB) error {
     return fmt.Errorf("exportGeoJSONStops() %s", stopsErr)
   }
 
-  if hasDBTable(db, "shapes") { // only export, if table exists
+  if hasDBTable(db, "shapes") { // only export, if "shapes" table exists
     if shapesErr := exportGeoJSONShapes(shapesDir, db); shapesErr != nil {
       return fmt.Errorf("exportGeoJSONShapes() %s", shapesErr)
     }
 
-    if hasDBSpatialite(db) { // only export if spatialite is enabled
-      if pathsErr := exportGeoJSONPaths(pathsDir, db); pathsErr != nil {
-        return fmt.Errorf("exportGeoJSONPaths() %s", pathsErr)
+    // only export if spatialite is enabled, and "routes_geo" table exists
+    if hasDBSpatialite(db) && hasDBTable(db, "routes_geo") {
+      if routesErr := exportGeoJSONRoutes(routesDir, db); routesErr != nil {
+        return fmt.Errorf("exportGeoJSONRoutes() %s", routesErr)
       }
     }
   }
@@ -171,25 +170,17 @@ func exportGeoJSONStops(dir string, db *sql.DB) error {
   return nil
 }
 
-// exportGeoJSONPaths Helper: Export GeoJSON for special
-// intersections of "stops" with "shapes" data.
+// exportGeoJSONRoutes Helper: Export GeoJSON for special
+// intersections of "stops" against "routes"+"trips"+"shapes" data.
 // note: Spatialite extension must be enabled!
-func exportGeoJSONPaths(dir string, db *sql.DB) error {
+func exportGeoJSONRoutes(dir string, db *sql.DB) error {
 
   // confirm that spatialite extension is loaded
   if hasDBSpatialite(db) == false {
     return fmt.Errorf("spatialite not loaded")
   }
 
-  // todo: retrieve all stops and hashmap by coord
-  // todo: create new geometry that merges all shapes (lines)
-  // todo: create new geometry that splits all shapes by stops (multilines)
-  // todo: map each section of multiline against stop coord hashmap
-  // todo: export geojson of each path between stops (lines)
-  // todo: export geojson col for all paths (col lines)
-
-  // todo: create new geometry to offset each path between stops (lines)
-  // todo: export geojson col for all paths offsets (col lines)
+  // todo: based on "routes_geo"
 
   return nil
 }

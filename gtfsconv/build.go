@@ -86,11 +86,9 @@ func Build(opt Options) error {
   }
   defer db.Close() // close when everything is done
 
-  // if not keeping existing db, import GTFS
-  if opt.KeepDB == false {
-    if iErr := importGTFS(db, gtfs); iErr != nil {
-      return fmt.Errorf("importGTFS() %s", iErr)
-    }
+  // import GTFS data
+  if iErr := importGTFS(db, gtfs); iErr != nil {
+    return fmt.Errorf("importGTFS() %s", iErr)
   }
 
   // if enabled, build extra spatialite tables
@@ -210,6 +208,15 @@ func getGTFS(path string) (*zip.Reader, error) {
 // importGTFS creates tables based on GTFS data.
 func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
 
+  // ensure gtfs_metadata table
+  if hasDBTable(db, "gtfs_metadata") == false {
+    if _, cmErr := db.Exec("create table gtfs_metadata " +
+                          "(tablename text, imported_at text);");
+      cmErr != nil {
+      return fmt.Errorf("failed to create gtfs_metadata table [%s]", cmErr)
+    }
+  }
+
   // begin directly importing each GTFS file (csv)
   for _, f := range gtfs.File {
     if valid, _ := isGTFS(f.Name); valid == false {
@@ -217,6 +224,14 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
     }
 
     tablename := f.Name[:len(f.Name)-4] // trim ".txt"
+
+    // check if this table already successfully imported
+    ims, imsErr := countDBTable(db, "*",
+      "gtfs_metadata where tablename = '" + tablename + "'")
+    switch {
+      case imsErr != nil: return fmt.Errorf("countDBTable() %s", imsErr)
+      case ims > 0: continue // skip importing file
+    }
 
     fr, oErr := f.Open()
     if oErr != nil {
@@ -239,8 +254,9 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
 
     // prepare create table statement
     ctStmt := fmt.Sprintf(
+      "drop table if exists %s; " +
       "create table %s (%s text);", tablename,
-      strings.Join(header, " text, "))
+      tablename, strings.Join(header, " text, "))
 
     // ensure valid utf8
     if utf8.ValidString(ctStmt) == false {
@@ -313,6 +329,13 @@ func importGTFS(db *sql.DB, gtfs *zip.Reader) error {
         itErr != nil {
         return fmt.Errorf("failed to insert %s [%s]", tablename, itErr)
       }
+    }
+
+    // indicate gtfs import success for this table
+    if _, imErr := db.Exec(
+      "insert into gtfs_metadata (tablename, imported_at) " +
+      "values (?, datetime('now'));", tablename); imErr != nil {
+      return fmt.Errorf("failed to note successful import [%s]", imErr)
     }
   }
 

@@ -60,9 +60,70 @@ func buildSpatialite(name string) (*sql.DB, error) {
     if shapesErr := buildSpatialShapes(db); shapesErr != nil {
       return nil, fmt.Errorf("buildSpatialShapes() %s", shapesErr)
     }
+
+    // if routesErr := buildSpatialRoutes(db); routesErr != nil {
+    //   return nil, fmt.Errorf("buildSpatialRoutes() %s", routesErr)
+    // }
   }
 
   return db, nil
+}
+
+// buildSpatialStops Helper: Build "stops_geo" spatialite table.
+func buildSpatialStops(db *sql.DB) error {
+
+  // count current number of stops, for sanity checking,
+  numStops, nsErr := countDBTable(db, "*", "stops")
+  if nsErr != nil {
+    return fmt.Errorf("countDBTable() %s", nsErr)
+  }
+
+  // if "stops_geo" already exists
+  if hasDBTable(db, "stops_geo") {
+
+    // count current number of shapes_geo
+    numGeo, ngErr := countDBTable(db, "*", "stops_geo")
+    switch {
+      case ngErr != nil: return fmt.Errorf("countDBTable() %s", ngErr)
+      case numGeo == numStops: return nil // if complete table, do nothin
+    }
+
+    // otherwise, drop for rebuilding
+    if _, dgErr := db.Exec(
+      "select DiscardGeometryColumn('stops_geo', 'geom'); " +
+      "drop table stops_geo;"); dgErr != nil {
+      return fmt.Errorf("failed to drop prev stops_geo table [%s]", dgErr)
+    }
+  }
+
+  // create new "stops_geo" table
+  // with spatialite geometry column
+  if _, cErr := db.Exec(
+    "create table stops_geo (stop_id text);" +
+    "select AddGeometryColumn('stops_geo', 'geom', 4326, 'POINT');");
+    cErr != nil {
+    return fmt.Errorf("failed to create table `stops_geo` [%s]", cErr)
+  }
+
+  // process each existing "stops.stop_id" into "stops_geo"
+  if _, iErr := db.Exec("insert into stops_geo (stop_id, geom) " +
+                      "select stop_id, geomfromtext(" +
+                        "'POINT('||stop_lon||' '||stop_lat||')'" +
+                      ", 4326) from stops;");
+    iErr != nil {
+    return fmt.Errorf("failed to insert rows into `stops_geo` [%s]", iErr)
+  }
+
+  // count "stops_geo" for final sanity check
+  numGeo, ngErr := countDBTable(db, "*", "stops_geo")
+  switch {
+    case ngErr != nil: return fmt.Errorf("countDBTable() %s", ngErr)
+    case numGeo != numStops: return fmt.Errorf(
+      "failed to sanity check stops_geo rows: %v expected, %v actual",
+      numStops, numGeo)
+  }
+
+  return nil
 }
 
 // buildSpatialShapes Helper: Build "shapes_geo" spatialite table.
@@ -80,13 +141,9 @@ func buildSpatialShapes(db *sql.DB) error {
 
     // count current number of shapes_geo
     numGeo, ngErr := countDBTable(db, "*", "shapes_geo")
-    if ngErr != nil {
-      return fmt.Errorf("countDBTable() %s", ngErr)
-    }
-
-    // if complete table, do nothing
-    if numGeo == numShapes {
-      return nil
+    switch {
+      case ngErr != nil: return fmt.Errorf("countDBTable() %s", ngErr)
+      case numGeo == numShapes: return nil // if complete table, do nothing
     }
 
     // otherwise, drop for rebuilding
@@ -120,13 +177,9 @@ func buildSpatialShapes(db *sql.DB) error {
 
   // count "shapes_geo" for final sanity check
   numGeo, ngErr := countDBTable(db, "*", "shapes_geo")
-  if ngErr != nil {
-    return fmt.Errorf("countDBTable() %s", ngErr)
-  }
-
-  // confirm proper number of rows
-  if numGeo != numShapes {
-    return fmt.Errorf(
+  switch {
+    case ngErr != nil: return fmt.Errorf("countDBTable() %s", ngErr)
+    case numGeo != numShapes: return fmt.Errorf(
       "failed to sanity check shapes_geo rows: %v expected, %v actual",
       numShapes, numGeo)
   }
@@ -134,66 +187,57 @@ func buildSpatialShapes(db *sql.DB) error {
   return nil
 }
 
-// buildSpatialStops Helper: Build "stops_geo" spatialite table.
-func buildSpatialStops(db *sql.DB) error {
+// buildSpatialRoutes Helper: Build "routes_geo" spatialite table.
+// note: "shapes" table must exist in db!
+func buildSpatialRoutes(db *sql.DB) error {
 
-  // count current number of stops, for sanity checking,
-  numStops, nsErr := countDBTable(db, "*", "stops")
+  // count current number of routes, for sanity checking,
+  numRoutes, nsErr := countDBTable(db, "distinct(route_id)", "routes")
   if nsErr != nil {
     return fmt.Errorf("countDBTable() %s", nsErr)
   }
 
-  // if "stops_geo" already exists
-  if hasDBTable(db, "stops_geo") {
+  // if "routes_geo" already exists
+  if hasDBTable(db, "routes_geo") {
 
-    // count current number of shapes_geo
-    numGeo, ngErr := countDBTable(db, "*", "stops_geo")
-    if ngErr != nil {
-      return fmt.Errorf("countDBTable() %s", ngErr)
-    }
-
-    // if complete table, do nothing
-    if numGeo == numStops {
-      return nil
+    // count current number of routes_geo
+    numGeo, ngErr := countDBTable(db, "*", "routes_geo")
+    switch {
+      case ngErr != nil: return fmt.Errorf("countDBTable() %s", ngErr)
+      case numGeo == numRoutes: return nil // if complete table, do nothing
     }
 
     // otherwise, drop for rebuilding
     if _, dgErr := db.Exec(
-      "select DiscardGeometryColumn('stops_geo', 'geom'); " +
-      "drop table stops_geo;"); dgErr != nil {
-      return fmt.Errorf("failed to drop prev stops_geo table [%s]", dgErr)
+      "select DiscardGeometryColumn('routes_geo', 'geom'); " +
+      "drop table routes_geo;"); dgErr != nil {
+      return fmt.Errorf("failed to drop prev routes_geo table [%s]", dgErr)
     }
   }
 
-  // create new "stops_geo" table
+  // create new "routes_geo" table
   // with spatialite geometry column
   if _, cErr := db.Exec(
-    "create table stops_geo (stop_id text);" +
-    "select AddGeometryColumn('stops_geo', 'geom', 4326, 'POINT');");
+    "create table routes_geo (route_id text);" +
+    "select AddGeometryColumn('routes_geo', 'geom', 4326, 'MULTILINESTRING');");
     cErr != nil {
-    return fmt.Errorf("failed to create table `stops_geo` [%s]", cErr)
+    return fmt.Errorf("failed to create table `routes_geo` [%s]", cErr)
   }
 
-  // process each existing "stops.stop_id" into "stops_geo"
-  if _, iErr := db.Exec("insert into stops_geo (stop_id, geom) " +
-                      "select stop_id, geomfromtext(" +
-                        "'POINT('||stop_lon||' '||stop_lat||')'" +
-                      ", 4326) from stops;");
-    iErr != nil {
-    return fmt.Errorf("failed to insert rows into `stops_geo` [%s]", iErr)
-  }
+  // st_union all "shapes_geo.geom" into a single multilinestringline,
+  // then st_linemerge all segments into minimal multilinestring,
+  // then st_union all "stops_geo.geom" into a single multipoint,
+  // then st_linescutatnodes multilinestring segments (shapes)
+  //      against multipoints (stops)
+  // and save/insert the final result
 
-  // count "stops_geo" for final sanity check
-  numGeo, ngErr := countDBTable(db, "*", "stops_geo")
-  if ngErr != nil {
-    return fmt.Errorf("countDBTable() %s", ngErr)
-  }
-
-  // confirm proper number of rows
-  if numGeo != numStops {
-    return fmt.Errorf(
-      "failed to sanity check stops_geo rows: %v expected, %v actual",
-      numStops, numGeo)
+  // count "routes_geo" for final sanity check
+  numGeo, ngErr := countDBTable(db, "*", "routes_geo")
+  switch {
+    case ngErr != nil: return fmt.Errorf("countDBTable() %s", ngErr)
+    case numGeo != numRoutes: return fmt.Errorf(
+        "failed to sanity check routes_geo rows: %v expected, %v actual",
+        numRoutes, numGeo)
   }
 
   return nil
