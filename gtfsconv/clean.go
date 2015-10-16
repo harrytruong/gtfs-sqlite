@@ -91,25 +91,29 @@ func cleanMTANYCT(db *sql.DB) error {
   for target.Next() {
     var genshp string // scan placeholder
     if sErr := target.Scan(&genshp); sErr != nil {
-      shapes = append(shapes, genshp)
+      return fmt.Errorf("failed to scan bad trips [%s]", sErr)
     }
+    shapes = append(shapes, genshp)
   }
   target.Close()
 
-  // for each missing shape, generate and insert a generalized shape
+  // for each missing general shape,
   for _, shp := range shapes {
-    if _, iErr := db.Exec(fmt.Sprintf(`
-      insert into shapes_geo (shape_id, geom)
-      select '%s', linemerge(st_union(geom))
-      from shapes_geo where shape_id like '%s%'`, shp, shp));
-      iErr != nil {
-      return fmt.Errorf("failed to insert general shape [%s]", iErr)
+    var simShp string
+
+    // determine the LONGEST similar shape
+    if simErr := db.QueryRow(fmt.Sprintf(`
+      select shape_id from shapes where shape_id like '%s%%'
+      group by shape_id order by count(shape_id) desc limit 1;`,
+      shp)).Scan(&simShp); simErr != nil {
+      return fmt.Errorf("failed to find similar shape [%s]", simErr)
     }
+
+    // update all irregular trips to use this shape
     if _, uErr := db.Exec(fmt.Sprintf(`
       update trips set shape_id = '%s'
-      where (shape_id = '' or shape_id is null) and
-        trip_id like '%%%s%';`, shp, shp));
-      uErr != nil {
+      where (shape_id = '' or shape_id is null) and trip_id like '%%%s%%';`,
+      simShp, shp)); uErr != nil {
       return fmt.Errorf("failed to update with general shape [%s]", uErr)
     }
   }
@@ -134,7 +138,7 @@ func cleanMTANYCT(db *sql.DB) error {
   // indicate we succssfully ran a cleaning on this table
   if _, ciErr := db.Exec(
     "update gtfs_metadata set cleaned = 1 " +
-    "where tablename = trips;", ); ciErr != nil {
+    "where tablename = 'trips';"); ciErr != nil {
     return fmt.Errorf("failed to note successful cleaning [%s]", ciErr)
   }
 

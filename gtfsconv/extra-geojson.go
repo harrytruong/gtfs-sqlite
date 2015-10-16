@@ -4,6 +4,7 @@ import (
   "os"
   "fmt"
   "database/sql"
+  "io/ioutil"
 )
 
 // exportGeoJSON creates geojson files from sqlite db.
@@ -177,10 +178,47 @@ func exportGeoJSONRoutes(dir string, db *sql.DB) error {
 
   // confirm that spatialite extension is loaded
   if hasDBSpatialite(db) == false {
-    return fmt.Errorf("spatialite not loaded")
+    return fmt.Errorf("spatialite is not loaded")
   }
 
-  // todo: based on "routes_geo"
+  routes, rErr := db.Query(
+    "select route_id, direction_id, asGeoJSON(geom)," +
+    "asGeoJSON(stopgeom), asGeoJSON(pathgeom) from routes_geo;")
+  if rErr != nil {
+    return fmt.Errorf("could not query routes_geo [%s]", rErr)
+  }
+
+  var id, direc, rteGeo, rteStopGeo, rtePathGeo string
+  for routes.Next() {
+    if sErr := routes.Scan(&id, &direc, &rteGeo, &rteStopGeo, &rtePathGeo);
+      sErr != nil {
+      return fmt.Errorf("could not scan routes_geo [%s]", sErr)
+    }
+
+    // write route line geojson
+    if wlErr := ioutil.WriteFile(fmt.Sprintf(
+      "%sroute-%s-dir-%s-line.geojson",
+      dir, id, direc), []byte(rteGeo), 0666);
+      wlErr != nil {
+        return fmt.Errorf("failed to write route line geojson file [%s]", wlErr)
+    }
+
+    // write route stop geojson
+    if wsErr := ioutil.WriteFile(fmt.Sprintf(
+      "%sroute-%s-dir-%s-stop.geojson",
+      dir, id, direc), []byte(rteStopGeo), 0666);
+      wsErr != nil {
+        return fmt.Errorf("failed to write route stop geojson file [%s]", wsErr)
+    }
+
+    // write route path geojson
+    if wpErr := ioutil.WriteFile(fmt.Sprintf(
+      "%sroute-%s-dir-%s-path.geojson",
+      dir, id, direc), []byte(rtePathGeo), 0666);
+      wpErr != nil {
+        return fmt.Errorf("failed to write route path geojson file [%s]", wpErr)
+    }
+  }
 
   return nil
 }
