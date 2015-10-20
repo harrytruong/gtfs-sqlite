@@ -3,36 +3,15 @@ package gtfsconv
 import (
   "fmt"
   "database/sql"
-  "github.com/mattn/go-sqlite3"
 )
 
 // buildSpatialite enables Spatialite SQLite extension,
 // and creates additional spatial-enhanced tables.
-func buildSpatialite(name string) (*sql.DB, error) {
+func buildSpatialite(db *sql.DB) error {
 
-  // ensure sqlite db exists
-  if isExistFile(name) == false {
-    return nil, fmt.Errorf("failed to find %s sqlite db", name)
-  }
-
-  // register sqlite driver, w/ spatialite ext
-  sql.Register("spatialite",
-    &sqlite3.SQLiteDriver{
-      Extensions: []string{
-
-        // note: needs to exist on system
-        "libspatialite",
-      },
-    })
-
-  // open new db connection
-  db, dbErr := sql.Open("spatialite", name)
-  if dbErr != nil {
-    return nil, fmt.Errorf(
-      "failed to open existing sqlite db with spatialite [%s]", dbErr)
-  }
+  // sanity check that spatialite is loaded
   if hasDBSpatialite(db) == false {
-    return nil, fmt.Errorf("spatialite not loaded")
+    return fmt.Errorf("spatialite is not loaded")
   }
 
   // check for spatialite metadata tables
@@ -47,26 +26,26 @@ func buildSpatialite(name string) (*sql.DB, error) {
        // initialize spatialite metadata
        "select InitSpatialMetaData();");
        initErr != nil {
-       return nil, fmt.Errorf(
+       return fmt.Errorf(
          "failed to call `InitSpatialMetaData()` [%s]", initErr)
      }
   }
 
   if stopsErr := buildSpatialStops(db); stopsErr != nil {
-    return nil, fmt.Errorf("buildSpatialStops() %s", stopsErr)
+    return fmt.Errorf("buildSpatialStops() %s", stopsErr)
   }
 
   if hasDBTable(db, "shapes") { // only build, if "shapes" table exists
     if shapesErr := buildSpatialShapes(db); shapesErr != nil {
-      return nil, fmt.Errorf("buildSpatialShapes() %s", shapesErr)
+      return fmt.Errorf("buildSpatialShapes() %s", shapesErr)
     }
 
     if routesErr := buildSpatialRoutes(db); routesErr != nil {
-      return nil, fmt.Errorf("buildSpatialRoutes() %s", routesErr)
+      return fmt.Errorf("buildSpatialRoutes() %s", routesErr)
     }
   }
 
-  return db, nil
+  return nil
 }
 
 // buildSpatialStops Helper: Build "stops_geo" spatialite table.
@@ -112,6 +91,12 @@ func buildSpatialStops(db *sql.DB) error {
                       ", 4326) from stops;");
     iErr != nil {
     return fmt.Errorf("failed to insert rows into `stops_geo` [%s]", iErr)
+  }
+
+  // add unique index
+  if _, ciErr := db.Exec(
+    "create unique index stopgeo_idx on stops_geo (stop_id);"); ciErr != nil {
+    return fmt.Errorf("failed add index(es) to stops_geo [%s]", ciErr)
   }
 
   // count "stops_geo" for final sanity check
@@ -173,6 +158,13 @@ func buildSpatialShapes(db *sql.DB) error {
                      "from shapes group by shape_id;");
     iErr != nil {
     return fmt.Errorf("failed to insert rows into `shapes_geo` [%s]", iErr)
+  }
+
+  // add unique index
+  if _, ciErr := db.Exec(
+    "create unique index shapegeo_idx on shapes_geo (shape_id);");
+    ciErr != nil {
+    return fmt.Errorf("failed add index(es) to shapes_geo [%s]", ciErr)
   }
 
   // count "shapes_geo" for final sanity check
@@ -258,7 +250,8 @@ func buildSpatialRoutes(db *sql.DB) error {
       '%s', '%s',
       castToMulti(SHAPES.geom),
       castToMulti(STOPS.geom),
-      castToMulti(st_linescutatnodes(SHAPES.geom, STOPS.geom))
+      castToMulti(st_linescutatnodes(
+        st_linemerge(snap(SHAPES.geom, STOPS.geom, 0.0005)), STOPS.geom))
 
     from
       (select linemerge(st_union(ts.geom)) as geom from
@@ -276,6 +269,13 @@ func buildSpatialRoutes(db *sql.DB) error {
       on 1=1;`, rid, did, rid, did, rid, did)); irErr != nil {
       return fmt.Errorf("failed to generate new row [%s]", irErr)
     }
+  }
+
+  // add unique index
+  if _, ciErr := db.Exec(`
+    create index routegeo_idx on routes_geo (route_id);
+    create unique index routegeo_dir_idx on routes_geo (route_id, direction_id);`); ciErr != nil {
+    return fmt.Errorf("failed add index(es) to routes_geo [%s]", ciErr)
   }
 
   // count "routes_geo" for final sanity check

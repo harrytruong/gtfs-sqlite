@@ -2,6 +2,7 @@ package main
 
 import (
   "flag"
+  "time"
   "log"
   "github.com/harrytruong/gtfs-sqlite/gtfsconv"
 )
@@ -37,8 +38,9 @@ func init() {
 
 // main runs gtfsconv from CLI.
 func main() {
+  start := time.Now()
 
-  // log: starting build
+  // starting build
   log.Print("Building: This may take a while, please wait...")
   if opt.Spatialite {
     log.Print("Building: With Spatialite enabled, this takes EXTRA long!")
@@ -46,10 +48,11 @@ func main() {
   }
 
   // run gtfsconv.Build
-  if buildErr := gtfsconv.Build(opt); buildErr != nil {
+  if buildErr := gtfsconv.GoBuild(opt); buildErr != nil {
     log.Fatalf("Build failed: %s", buildErr)
   }
 
-  // log: yay, finished.
-  log.Print("Building: Finished! Enjoy!")
+  // yay, finished.
+  end := time.Now()
+  log.Printf("Building: Finished in %0.2fs! Enjoy!", end.Sub(start).Seconds())
 }
