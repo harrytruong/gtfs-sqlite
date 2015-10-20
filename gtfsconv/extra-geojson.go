@@ -49,74 +49,6 @@ func exportGeoJSON(dir string, db *sql.DB) error {
   return nil
 }
 
-// exportGeoJSONShapes Helper: Export GeoJSON for "shapes" table.
-func exportGeoJSONShapes(dir string, db *sql.DB) error {
-
-  // retrieve all unique shapes
-  shapes, shapesErr := db.Query(
-    "select distinct(shape_id) as id from shapes;")
-  if shapesErr != nil {
-    return fmt.Errorf("failed to select `distinct(shape_id)` [%s]", shapesErr)
-  }
-  defer shapes.Close()
-
-  var id string // placeholder for "shape_id" col
-  var features []jsony
-  for shapes.Next() {
-    if scanErr := shapes.Scan(&id); scanErr != nil {
-      return fmt.Errorf("failed to scan shapes query [%s]", scanErr)
-    }
-
-    // retrive all points for this shape
-    var shapeLine [][2]float64
-    var lat, lng float64 // placeholder for "lat", "lon" col
-    points, ptErr := db.Query(
-      "select shape_pt_lat, shape_pt_lon from shapes " +
-      "where shape_id = ? order by cast(shape_pt_sequence as int) asc;", id)
-    if ptErr != nil {
-      return fmt.Errorf("failed to select shape points [%s]", ptErr)
-    }
-    defer points.Close()
-    for points.Next() {
-      if ptscanErr := points.Scan(&lat, &lng); ptscanErr != nil {
-        return fmt.Errorf("failed to scan shapes points query [%s]", ptscanErr)
-      }
-      shapeLine = append(shapeLine, [2]float64{lng, lat})
-    }
-
-    // create final geojson "Feature"
-    feature := jsony{
-      "type": "Feature",
-      "properties": jsony{
-        "shape_id": id,
-      },
-      "geometry": jsony{
-        "type": "LineString",
-        "coordinates": shapeLine,
-      },
-    }
-
-    // write geojson "Feature"
-    if wjErr := writeJSON(dir+"shape."+id+".geojson", feature);
-      wjErr != nil {
-      return fmt.Errorf("writeJSON() %s", wjErr)
-    }
-
-    // and append for later featureCol
-    features = append(features, feature)
-  }
-
-  // create and write geojson "FeatureCollection"
-  if wjErr := writeJSON(dir+"all-shapes.geojson", jsony{
-      "type": "FeatureCollection",
-      "features": features,
-    }); wjErr != nil {
-    return fmt.Errorf("writeJSON() %s", wjErr)
-  }
-
-  return nil
-}
-
 // exportGeoJSONStops Helper: Export GeoJSON for "stops" table.
 func exportGeoJSONStops(dir string, db *sql.DB) error {
 
@@ -162,6 +94,80 @@ func exportGeoJSONStops(dir string, db *sql.DB) error {
 
   // create and write geojson "FeatureCollection"
   if wjErr := writeJSON(dir+"all-stops.geojson", jsony{
+      "type": "FeatureCollection",
+      "features": features,
+    }); wjErr != nil {
+    return fmt.Errorf("writeJSON() %s", wjErr)
+  }
+
+  return nil
+}
+
+// exportGeoJSONShapes Helper: Export GeoJSON for "shapes" table.
+func exportGeoJSONShapes(dir string, db *sql.DB) error {
+
+  // retrieve all unique shapes
+  var shapeIDs []string
+  shapes, shapesErr := db.Query(
+    "select distinct(shape_id) as id from shapes;")
+  if shapesErr != nil {
+    return fmt.Errorf("failed to select `distinct(shape_id)` [%s]", shapesErr)
+  }
+
+  var id string // placeholder for "shape_id" col
+  var features []jsony
+  for shapes.Next() {
+    if scanErr := shapes.Scan(&id); scanErr != nil {
+      return fmt.Errorf("failed to scan shapes query [%s]", scanErr)
+    }
+
+    shapeIDs = append(shapeIDs, id)
+  }
+  shapes.Close()
+
+  for _, id := range shapeIDs {
+
+    // retrive all points for this shape
+    var shapeLine [][2]float64
+    var lat, lng float64 // placeholder for "lat", "lon" col
+    points, ptErr := db.Query(
+      "select shape_pt_lat, shape_pt_lon from shapes " +
+      "where shape_id = ? order by cast(shape_pt_sequence as int) asc;", id)
+    if ptErr != nil {
+      return fmt.Errorf("failed to select shape points [%s]", ptErr)
+    }
+    defer points.Close()
+    for points.Next() {
+      if ptscanErr := points.Scan(&lat, &lng); ptscanErr != nil {
+        return fmt.Errorf("failed to scan shapes points query [%s]", ptscanErr)
+      }
+      shapeLine = append(shapeLine, [2]float64{lng, lat})
+    }
+
+    // create final geojson "Feature"
+    feature := jsony{
+      "type": "Feature",
+      "properties": jsony{
+        "shape_id": id,
+      },
+      "geometry": jsony{
+        "type": "LineString",
+        "coordinates": shapeLine,
+      },
+    }
+
+    // write geojson "Feature"
+    if wjErr := writeJSON(dir+"shape."+id+".geojson", feature);
+      wjErr != nil {
+      return fmt.Errorf("writeJSON() %s", wjErr)
+    }
+
+    // and append for later featureCol
+    features = append(features, feature)
+  }
+
+  // create and write geojson "FeatureCollection"
+  if wjErr := writeJSON(dir+"all-shapes.geojson", jsony{
       "type": "FeatureCollection",
       "features": features,
     }); wjErr != nil {

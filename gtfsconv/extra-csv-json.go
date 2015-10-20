@@ -78,22 +78,6 @@ func exportJSON(dir string, db *sql.DB) error {
       continue // ignore missing tables
     }
 
-    /*
-    // create new general json file
-    w, writeErr := os.Create(dir + tbl + ".json")
-    if writeErr != nil {
-      return writeErr
-    }
-    defer w.Close()
-
-    // wrap entire json file with "[]",
-    // to reprsent an array of objects,
-    // one for each row
-    if _, arrWErr := w.Write([]byte("[")); arrWErr != nil {
-      return arrWErr
-    }
-    */
-
     // retrieve all rows
     rows, queryErr := db.Query(fmt.Sprintf("select * from %s;", tbl))
     if queryErr != nil {
@@ -102,17 +86,14 @@ func exportJSON(dir string, db *sql.DB) error {
     defer rows.Close()
 
     // setup data container
-    // data := make(map[string]*string)
     columns, _ := rows.Columns()
     values := make([]string, len(columns))
     scanner := make([]interface{}, len(columns))
     for i := range scanner {
-      // data[columns[i]] = &values[i]
       scanner[i] = &values[i]
     }
 
     // iterate over each query result row
-    // writeComma := false
     var jsonCol []jsony
     for rows.Next() {
       if scanErr := rows.Scan(scanner...); scanErr != nil {
@@ -124,28 +105,6 @@ func exportJSON(dir string, db *sql.DB) error {
 
       // append to json collection
       jsonCol = append(jsonCol, jsonRow)
-
-      /*
-      // marshal data into JSON []byte
-      jsonBytes, jsonErr := json.Marshal(data)
-      if jsonErr != nil {
-        return jsonErr
-      }
-
-      // write comma-separator
-      if writeComma {
-        if _, jsonWErr := w.Write([]byte(",")); jsonWErr != nil {
-          return jsonWErr
-        }
-      } else {
-        writeComma = true // for use with next row
-      }
-
-      // write to general json file
-      if _, jsonWErr := w.Write(jsonBytes); jsonWErr != nil {
-        return jsonWErr
-      }
-      */
 
       // write extra individual json files
       file := ""
@@ -165,14 +124,6 @@ func exportJSON(dir string, db *sql.DB) error {
     if wErr := writeJSON(dir + tbl + ".json", jsonCol); wErr != nil {
       return fmt.Errorf("writeJSON() for all rows in %s [%s]", tbl, wErr)
     }
-
-    /*
-    // close json file with "]"
-    // (for end array of objects)
-    if _, arrWErr := w.Write([]byte("]")); arrWErr != nil {
-      return arrWErr
-    }
-    */
   }
 
   return nil
